@@ -17,7 +17,7 @@ __global__ void render(vec3 *img, int nx, int ny, vec3 lower_left_corner, vec3 h
     float u = float(i) / float(nx);
     float v = float(j) / float(ny);
     ray r(origin, lower_left_corner + u * horizontal + v * vertical);
-    img[pixel_index] = color(r);
+    img[pixel_index] = 255.99*color(r);
 }
 
 
@@ -51,9 +51,9 @@ int main() {
     for (int j = ny-1; j >= 0; j--) {
         for (int i = 0; i < nx; i++) {
             size_t pixel_index = j*nx + i;
-            int ir = int(255.99*img[pixel_index].r());
-            int ig = int(255.99*img[pixel_index].g());
-            int ib = int(255.99*img[pixel_index].b());
+            int ir = int(img[pixel_index].r());
+            int ig = int(img[pixel_index].g());
+            int ib = int(img[pixel_index].b());
             std::cout << ir << " " << ig << " " << ib << "\n";
         }
     }
