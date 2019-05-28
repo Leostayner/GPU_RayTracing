@@ -4,12 +4,18 @@
 #include "hitable_list.h"
 #include "sphere.h"
 
-__global__ void create_world(hitable **d_list, hitable **d_world) {
+__global__ void create_world(hitable **list, hitable **world) {
     if (threadIdx.x == 0 && blockIdx.x == 0) {
-        *(d_list)   = new sphere(vec3(0,0,-1), 0.5);
-        *(d_list+1) = new sphere(vec3(0,-100.5,-1), 100);
-        *d_world    = new hitable_list(d_list,2);
+        *(list)   = new sphere(vec3(0,0,-1), 0.5);
+        *(list+1) = new sphere(vec3(0,-100.5,-1), 100);
+        *world    = new hitable_list(list,2);
     }
+}
+
+__global__ void free_world(hitable **list, hitable **world) {
+    delete *(list);
+    delete *(list+1);
+    delete *world;
 }
 
 __device__ vec3 color(const ray& r, hitable **world) {
@@ -84,4 +90,5 @@ int main() {
     }
 
     cudaFree(img);
+    free_world<<<1,1>>>(list, world);
 }
