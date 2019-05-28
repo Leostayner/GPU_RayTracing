@@ -3,19 +3,22 @@
 #include "ray.h"
 #include "hitable_list.h"
 #include "sphere.h"
+#include "camera.h"
 
-__global__ void create_world(hitable **list, hitable **world) {
+__global__ void create_world(hitable **list, hitable **world, camera **cam) {
     if (threadIdx.x == 0 && blockIdx.x == 0) {
         *(list)   = new sphere(vec3(0,0,-1), 0.5);
         *(list+1) = new sphere(vec3(0,-100.5,-1), 100);
         *world    = new hitable_list(list,2);
+        *cam      = new camera();
     }
 }
 
-__global__ void free_world(hitable **list, hitable **world) {
+__global__ void free_world(hitable **list, hitable **world, camera **cam) {
     delete *(list);
     delete *(list+1);
     delete *world;
+    delete *cam;
 }
 
 __device__ vec3 color(const ray& r, hitable **world) {
@@ -30,53 +33,53 @@ __device__ vec3 color(const ray& r, hitable **world) {
     }
 }
 
-__global__ void render(vec3 *img, int nx, int ny, vec3 lower_left_corner, vec3 horizontal, vec3 vertical, vec3 origin, hitable **world) {
+
+__global__ void render(vec3 *img, int nx, int ny, int ns, hitable **world, camera **cam) {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
     int j = threadIdx.y + blockIdx.y * blockDim.y;
 
     if((i >= nx) || (j >= ny)) return;
     
     int pixel_index = j * nx + i;
-    float u = float(i) / float(nx);
-    float v = float(j) / float(ny);
-
-    ray r(origin, lower_left_corner + u * horizontal + v * vertical);
-    img[pixel_index] = 255.99 * color(r, world);
+    vec3 col(0,0,0);
+    for(int s=0; s<ns; s++){
+        float u = float(i) / float(nx);
+        float v = float(j) / float(ny);
+        ray r = (*cam)->get_ray(u,v);
+        col += color(r, world);
+        
+    }
+    img[pixel_index] = 255.99 * col/float(ns);
 }
 
 
 int main() {
     int nx = 1200;
     int ny = 600;
+    int ns = 100;
     int tx = 8;
     int ty = 8;
-
-    std::cerr << "Rendering Image: " << nx << "x" << ny << std::endl;
-
-    int num_pixels = nx*ny;
-    size_t img_size = num_pixels*sizeof(vec3);
-
-    vec3 *img;
-    cudaMallocManaged((void **)&img, img_size);
-
+    
     dim3 blocks(nx/tx+1,ny/ty+1);
     dim3 threads(tx,ty);
+
+    vec3 *img;
+    cudaMallocManaged((void **)&img, nx*ny*sizeof(vec3));
 
     hitable **list, **world; 
     cudaMalloc((void **)&list, 2*sizeof(hitable *));
     cudaMalloc((void **)&world, sizeof(hitable *));
-    
-    create_world<<<1,1>>>(list, world);
-    cudaDeviceSynchronize();
-    
-    vec3 lower_left(-2.0, -1.0, -1.0);
-    vec3 horizontal(4.0, 0.0, 0.0);
-    vec3 vertical(0.0, 2.0, 0.0);
-    vec3 origin(0.0, 0.0, 0.0);
 
-    render<<<blocks, threads>>>(img, nx, ny, lower_left, horizontal, vertical, origin, world);
+    camera **cam;
+    cudaMalloc((void **)&cam, sizeof(camera *));
+
+    create_world<<<1,1>>>(list, world, cam);
     cudaDeviceSynchronize();
-    
+        
+    render<<<blocks, threads>>>(img, nx, ny, ns, world, cam);
+    cudaDeviceSynchronize();
+
+    std::cerr << "Rendering Image: " << nx << "x" << ny << std::endl;
     std::cout << "P3\n" << nx << " " << ny << "\n255\n";
     
     for (int j = ny-1; j >= 0; j--) {
@@ -90,5 +93,5 @@ int main() {
     }
 
     cudaFree(img);
-    free_world<<<1,1>>>(list, world);
+    free_world<<<1,1>>>(list, world, cam);
 }
