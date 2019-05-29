@@ -1,5 +1,5 @@
-#include <thrust/random/linear_congruential_engine.h>
 #include <iostream>
+#include <float.h>
 #include "vec3.h"
 #include "ray.h"
 #include "hitable_list.h"
@@ -16,20 +16,18 @@ __global__ void random_generate(float *rand_numbers, int nx, int ny){
     int index = j * nx + i;
     curandState state;
 
-    curand_init(clock64(), i, 0, &state);
+    curand_init(1984, index, 0, &state);
     rand_numbers[index] = curand_uniform(&state);
 }
 
-/*
-__device__ vec3 random_in_unit_sphere(curandState *state) {
+
+__device__ vec3 random_in_unit_sphere(float rand_value) {
     vec3 p; 
     do {
-        thrust::minstd_rand rng1;
-        p = 2.0f* vec3(curand_uniform(state), curand_uniform(state), curand_uniform(state)) - vec3(1,1,1);
+        p = 2.0f* vec3(rand_value, rand_value, rand_value) - vec3(1,1,1);
     } while (p.squared_length() >= 1.0f);
     return p;
 }
-*/
 
 __global__ void create_world(hitable **list, hitable **world, camera **cam) {
     if (threadIdx.x == 0 && blockIdx.x == 0) {
@@ -59,6 +57,21 @@ __device__ vec3 color(const ray& r, hitable **world) {
     }
 }
 
+/*
+__device__ vec3 color(const ray& r, hitable **world, float rand_value) {
+    hit_record rec;
+    if ((*world)->hit(r, 0.0, MAXFLOAT, rec)) {
+       vec3 target = rec.p + rec.normal + random_in_unit_sphere(rand_value);
+       return 0.5*color( ray(rec.p, target-rec.p), world, rand_value);
+    }
+    else {
+       vec3 unit_direction = unit_vector(r.direction());
+       float t = 0.5*(unit_direction.y() + 1.0);
+       return (1.0-t)*vec3(1.0, 1.0, 1.0) + t*vec3(0.5, 0.7, 1.0);
+    }
+ }
+*/
+
 __global__ void render(vec3 *img, int nx, int ny, int ns, hitable **world, camera **cam, float* rand_numbers) {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
     int j = threadIdx.y + blockIdx.y * blockDim.y;
@@ -68,18 +81,17 @@ __global__ void render(vec3 *img, int nx, int ny, int ns, hitable **world, camer
     
     vec3 col(0,0,0);
     for(int s=0; s<ns; s++){
-        thrust::minstd_rand rng1;
         float u = float(i + rand_numbers[pixel_index])/ float(nx);
         float v = float(j + rand_numbers[pixel_index])/ float(ny);
         ray r = (*cam)->get_ray(u, v);
         col += color(r, world);
-        
     }
-    col /= float(ns);
-    col[0] = sqrt(col[0]);
-    col[1] = sqrt(col[1]);
-    col[2] = sqrt(col[2]);
-    img[pixel_index] = 255.99 * col;
+    img[pixel_index] = 255.99 * (col/float(ns));
+    //col /= float(ns);
+    //col[0] = sqrt(col[0]);
+    //col[1] = sqrt(col[1]);
+    //col[2] = sqrt(col[2]);
+    //img[pixel_index] = 255.99 * col;
 }
 
 
@@ -93,6 +105,7 @@ int main() {
     dim3 blocks(nx/tx+1,ny/ty+1);
     dim3 threads(tx,ty);
 
+    /**********/
     vec3 *img;
     cudaMallocManaged((void **)&img, nx*ny*sizeof(vec3));
 
@@ -106,6 +119,8 @@ int main() {
     camera **cam;
     cudaMalloc((void **)&cam, sizeof(camera *));
 
+
+    /**********/
     create_world<<<1,1>>>(list, world, cam);
     cudaDeviceSynchronize();
     
@@ -115,6 +130,7 @@ int main() {
     render<<<blocks, threads>>>(img, nx, ny, ns, world, cam, rand_numbers);
     cudaDeviceSynchronize();
 
+    /**********/
     std::cerr << "Rendering Image: " << nx << "x" << ny << std::endl;
     std::cout << "P3\n" << nx << " " << ny << "\n255\n";
     
@@ -128,6 +144,7 @@ int main() {
         }
     }
 
+    /**********/
     cudaFree(img);
     free_world<<<1,1>>>(list, world, cam);
 }
