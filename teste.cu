@@ -1,13 +1,15 @@
 #include <thrust/random/linear_congruential_engine.h>
 #include <iostream>
+
 int main(void)
 {
   // create a minstd_rand object, which is an instance of linear_congruential_engine
   thrust::minstd_rand rng1;
   // output some random values to cout
   std::cout << rng1() << std::endl;
-  std::cout << rng1() << std::endl;
-  std::cout << rng1() << std::endl;
+  std::cout << drand48() << std::endl;
+  std::cout << drand48() << std::endl;
+  
   // a random value is printed
   // create a new minstd_rand from a seed
   thrust::minstd_rand rng2(13);

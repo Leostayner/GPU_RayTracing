@@ -5,16 +5,31 @@
 #include "hitable_list.h"
 #include "sphere.h"
 #include "camera.h"
+#include <curand_kernel.h>
 
-__device__ vec3 random_in_unit_sphere() {
-    vec3 p;
-    thrust::minstd_rand rng1;
 
+__global__ void random_generate(float *rand_numbers, int nx, int ny){
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
+    int j = threadIdx.y + blockIdx.y * blockDim.y;
+
+    if((i >= nx) || (j >= ny)) return;
+    int index = j * nx + i;
+    curandState state;
+
+    curand_init(clock64(), i, 0, &state);
+    rand_numbers[index] = curand_uniform(&state);
+}
+
+/*
+__device__ vec3 random_in_unit_sphere(curandState *state) {
+    vec3 p; 
     do {
-        p = 2.0f* vec3(rng1(), rng1(), rng1()) - vec3(1,1,1);
+        thrust::minstd_rand rng1;
+        p = 2.0f* vec3(curand_uniform(state), curand_uniform(state), curand_uniform(state)) - vec3(1,1,1);
     } while (p.squared_length() >= 1.0f);
     return p;
 }
+*/
 
 __global__ void create_world(hitable **list, hitable **world, camera **cam) {
     if (threadIdx.x == 0 && blockIdx.x == 0) {
@@ -34,30 +49,29 @@ __global__ void free_world(hitable **list, hitable **world, camera **cam) {
 
 __device__ vec3 color(const ray& r, hitable **world) {
     hit_record rec;
-    if ((*world)->hit(r, 0.001, MAXFLOAT, rec)) {
-       vec3 target = rec.p + rec.normal + random_in_unit_sphere();
-       return 0.5*color( ray(rec.p, target-rec.p), world);
+    if ((*world)->hit(r, 0.0, MAXFLOAT, rec)) {
+        return 0.5f*vec3(rec.normal.x()+1.0f, rec.normal.y()+1.0f, rec.normal.z()+1.0f);
     }
     else {
-       vec3 unit_direction = unit_vector(r.direction());
-       float t = 0.5*(unit_direction.y() + 1.0);
-       return (1.0-t)*vec3(1.0, 1.0, 1.0) + t*vec3(0.5, 0.7, 1.0);
+        vec3 unit_direction = unit_vector(r.direction());
+        float t = 0.5f*(unit_direction.y() + 1.0f);
+        return (1.0f-t)*vec3(1.0, 1.0, 1.0) + t*vec3(0.5, 0.7, 1.0);
     }
- }
+}
 
-__global__ void render(vec3 *img, int nx, int ny, int ns, hitable **world, camera **cam) {
+__global__ void render(vec3 *img, int nx, int ny, int ns, hitable **world, camera **cam, float* rand_numbers) {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
     int j = threadIdx.y + blockIdx.y * blockDim.y;
 
     if((i >= nx) || (j >= ny)) return;
-    
     int pixel_index = j * nx + i;
+    
     vec3 col(0,0,0);
     for(int s=0; s<ns; s++){
         thrust::minstd_rand rng1;
-        float u = float(i) + rng1()/ float(nx);
-        float v = float(j) + rng1()/ float(ny);
-        ray r = (*cam)->get_ray(u,v);
+        float u = float(i + rand_numbers[pixel_index])/ float(nx);
+        float v = float(j + rand_numbers[pixel_index])/ float(ny);
+        ray r = (*cam)->get_ray(u, v);
         col += color(r, world);
         
     }
@@ -82,6 +96,9 @@ int main() {
     vec3 *img;
     cudaMallocManaged((void **)&img, nx*ny*sizeof(vec3));
 
+    float *rand_numbers;
+    cudaMallocManaged((void **)&rand_numbers, nx*ny*sizeof(float));
+
     hitable **list, **world; 
     cudaMalloc((void **)&list, 2*sizeof(hitable *));
     cudaMalloc((void **)&world, sizeof(hitable *));
@@ -91,8 +108,11 @@ int main() {
 
     create_world<<<1,1>>>(list, world, cam);
     cudaDeviceSynchronize();
-        
-    render<<<blocks, threads>>>(img, nx, ny, ns, world, cam);
+    
+    random_generate<<<blocks, threads>>>(rand_numbers, nx, ny);
+    cudaDeviceSynchronize();
+
+    render<<<blocks, threads>>>(img, nx, ny, ns, world, cam, rand_numbers);
     cudaDeviceSynchronize();
 
     std::cerr << "Rendering Image: " << nx << "x" << ny << std::endl;
