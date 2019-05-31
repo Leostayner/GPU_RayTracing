@@ -8,6 +8,15 @@
 #include <curand_kernel.h>
 
 
+__device__ vec3 random_in_unit_sphere(curandState *rand_state) {
+    vec3 p;
+    do {
+        p = 2.0f*vec3(curand_uniform(rand_state), curand_uniform(rand_state), curand_uniform(rand_state)) - vec3(1,1,1);
+    } while (p.squared_length() >= 1.0f);
+    return p;
+}
+
+//Alterar
 __global__ void create_world(hitable **list, hitable **world, camera **cam) {
     if (threadIdx.x == 0 && blockIdx.x == 0) {
         *(list)   = new sphere(vec3(0,0,-1), 0.5);
@@ -17,6 +26,7 @@ __global__ void create_world(hitable **list, hitable **world, camera **cam) {
     }
 }
 
+//Alterar
 __global__ void free_world(hitable **list, hitable **world, camera **cam) {
     delete *(list);
     delete *(list+1);
@@ -24,18 +34,25 @@ __global__ void free_world(hitable **list, hitable **world, camera **cam) {
     delete *cam;
 }
 
-__device__ vec3 color(const ray& r, hitable **world) {
-    hit_record rec;
-    if ((*world)->hit(r, 0.0, MAXFLOAT, rec)) {
-        return 0.5f*vec3(rec.normal.x()+1.0f, rec.normal.y()+1.0f, rec.normal.z()+1.0f);
+__device__ vec3 color(const ray& r, hitable **world, curandState *rand_state) {
+    ray cur_ray = r;
+    float cur_attenuation = 1.0f;
+    for(int i = 0; i < 50; i++) {
+        hit_record rec;
+        if ((*world)->hit(cur_ray, 0.001f, FLT_MAX, rec)) {
+            vec3 target = rec.p + rec.normal + random_in_unit_sphere(rand_state);
+            cur_attenuation *= 0.5f;
+            cur_ray = ray(rec.p, target-rec.p);
+        }
+        else {
+            vec3 unit_direction = unit_vector(cur_ray.direction());
+            float t = 0.5f*(unit_direction.y() + 1.0f);
+            vec3 c = (1.0f-t)*vec3(1.0, 1.0, 1.0) + t*vec3(0.5, 0.7, 1.0);
+            return cur_attenuation * c;
+        }
     }
-    else {
-        vec3 unit_direction = unit_vector(r.direction());
-        float t = 0.5f*(unit_direction.y() + 1.0f);
-        return (1.0f-t)*vec3(1.0, 1.0, 1.0) + t*vec3(0.5, 0.7, 1.0);
-    }
+    return vec3(0.0,0.0,0.0);
 }
-
 
 __global__ void render(vec3 *img, int nx, int ny, int ns, hitable **world, camera **cam) {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
@@ -52,15 +69,14 @@ __global__ void render(vec3 *img, int nx, int ny, int ns, hitable **world, camer
         float u = float(i + curand_uniform(&state)) / float(nx);
         float v = float(j + curand_uniform(&state)) / float(ny);
         ray r = (*cam)->get_ray(u, v);
-        col += color(r, world);
+        col += color(r, world, &state);
     }
     
-    img[pixel_index] = 255.99 * (col/float(ns));
-    //col /= float(ns);
-    //col[0] = sqrt(col[0]);
-    //col[1] = sqrt(col[1]);
-    //col[2] = sqrt(col[2]);
-    //img[pixel_index] = 255.99 * col;
+    col /= float(ns);
+    col[0] = sqrt(col[0]);
+    col[1] = sqrt(col[1]);
+    col[2] = sqrt(col[2]);
+    img[pixel_index] = 255.99 * col;
 }
 
 
@@ -78,7 +94,6 @@ int main() {
     vec3 *img;
     cudaMallocManaged((void **)&img, nx*ny*sizeof(vec3));
 
-
     hitable **list, **world; 
     cudaMalloc((void **)&list, 2*sizeof(hitable *));
     cudaMalloc((void **)&world, sizeof(hitable *));
@@ -86,6 +101,7 @@ int main() {
     camera **cam;
     cudaMalloc((void **)&cam, sizeof(camera *));
 
+    
     /**********/
     create_world<<<1,1>>>(list, world, cam);
     cudaDeviceSynchronize();
@@ -109,13 +125,8 @@ int main() {
 
     /**********/
     cudaDeviceSynchronize();
-    //void* freeList[5] = {cam, world, list, img};
-    //for(int i=0; i<5; i++) cudaFree(freeList[i]);    
     free_world<<<1,1>>>(list, world, cam);
-    cudaFree(cam);
-    cudaFree(world);
-    cudaFree(list);
-    cudaFree(img);
-    
+    void* freeList[4] = {cam, world, list, img};
+    for(int i=0; i<4; i++) cudaFree(freeList[i]);    
     cudaDeviceReset();
 }
