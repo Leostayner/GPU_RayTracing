@@ -1,48 +1,50 @@
 #include <iostream>
+#include <curand_kernel.h>
 #include <float.h>
 #include "vec3.h"
 #include "ray.h"
 #include "hitable_list.h"
 #include "sphere.h"
 #include "camera.h"
-#include <curand_kernel.h>
-
-
-__device__ vec3 random_in_unit_sphere(curandState *rand_state) {
-    vec3 p;
-    do {
-        p = 2.0f*vec3(curand_uniform(rand_state), curand_uniform(rand_state), curand_uniform(rand_state)) - vec3(1,1,1);
-    } while (p.squared_length() >= 1.0f);
-    return p;
-}
+#include "material.h"
 
 //Alterar
-__global__ void create_world(hitable **list, hitable **world, camera **cam) {
+__global__ void create_world(hitable **d_list, hitable **d_world, camera **d_camera) {
     if (threadIdx.x == 0 && blockIdx.x == 0) {
-        *(list)   = new sphere(vec3(0,0,-1), 0.5);
-        *(list+1) = new sphere(vec3(0,-100.5,-1), 100);
-        *world    = new hitable_list(list,2);
-        *cam      = new camera();
+        d_list[0] = new sphere(vec3(0,0,-1), 0.5, new lambertian(vec3(0.8, 0.3, 0.3)));
+        d_list[1] = new sphere(vec3(0,-100.5,-1), 100, new lambertian(vec3(0.8, 0.8, 0.0)));
+        d_list[2] = new sphere(vec3(1,0,-1), 0.5, new metal(vec3(0.8, 0.6, 0.2), 1.0));
+        d_list[3] = new sphere(vec3(-1,0,-1), 0.5, new metal(vec3(0.8, 0.8, 0.8), 0.3));
+        *d_world  = new hitable_list(d_list,4);
+        *d_camera = new camera();
     }
 }
 
 //Alterar
-__global__ void free_world(hitable **list, hitable **world, camera **cam) {
-    delete *(list);
-    delete *(list+1);
-    delete *world;
-    delete *cam;
+__global__ void free_world(hitable **d_list, hitable **d_world, camera **d_camera) {
+    for(int i=0; i < 4; i++) {
+        delete ((sphere *)d_list[i])->mat_ptr;
+        delete d_list[i];
+    }
+    delete *d_world;
+    delete *d_camera;
 }
 
 __device__ vec3 color(const ray& r, hitable **world, curandState *rand_state) {
     ray cur_ray = r;
-    float cur_attenuation = 1.0f;
+    vec3 cur_attenuation = vec3(1.0,1.0,1.0);
     for(int i = 0; i < 50; i++) {
         hit_record rec;
         if ((*world)->hit(cur_ray, 0.001f, FLT_MAX, rec)) {
-            vec3 target = rec.p + rec.normal + random_in_unit_sphere(rand_state);
-            cur_attenuation *= 0.5f;
-            cur_ray = ray(rec.p, target-rec.p);
+            ray scattered;
+            vec3 attenuation;
+            if(rec.mat_ptr->scatter(cur_ray, rec, attenuation, scattered, rand_state)) {
+                cur_attenuation *= attenuation;
+                cur_ray = scattered;
+            }
+            else {
+                return vec3(0.0,0.0,0.0);
+            }
         }
         else {
             vec3 unit_direction = unit_vector(cur_ray.direction());
