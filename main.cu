@@ -8,27 +8,6 @@
 #include <curand_kernel.h>
 
 
-__global__ void random_generate(float *rand_numbers, int nx, int ny){
-    int i = threadIdx.x + blockIdx.x * blockDim.x;
-    int j = threadIdx.y + blockIdx.y * blockDim.y;
-
-    if((i >= nx) || (j >= ny)) return;
-    int index = j * nx + i;
-    curandState state;
-
-    curand_init(1984, index, 0, &state);
-    rand_numbers[index] = curand_uniform(&state);
-}
-
-
-__device__ vec3 random_in_unit_sphere(float rand_value) {
-    vec3 p; 
-    do {
-        p = 2.0f* vec3(rand_value, rand_value, rand_value) - vec3(1,1,1);
-    } while (p.squared_length() >= 1.0f);
-    return p;
-}
-
 __global__ void create_world(hitable **list, hitable **world, camera **cam) {
     if (threadIdx.x == 0 && blockIdx.x == 0) {
         *(list)   = new sphere(vec3(0,0,-1), 0.5);
@@ -57,35 +36,25 @@ __device__ vec3 color(const ray& r, hitable **world) {
     }
 }
 
-/*
-__device__ vec3 color(const ray& r, hitable **world, float rand_value) {
-    hit_record rec;
-    if ((*world)->hit(r, 0.0, MAXFLOAT, rec)) {
-       vec3 target = rec.p + rec.normal + random_in_unit_sphere(rand_value);
-       return 0.5*color( ray(rec.p, target-rec.p), world, rand_value);
-    }
-    else {
-       vec3 unit_direction = unit_vector(r.direction());
-       float t = 0.5*(unit_direction.y() + 1.0);
-       return (1.0-t)*vec3(1.0, 1.0, 1.0) + t*vec3(0.5, 0.7, 1.0);
-    }
- }
-*/
 
-__global__ void render(vec3 *img, int nx, int ny, int ns, hitable **world, camera **cam, float* rand_numbers) {
+__global__ void render(vec3 *img, int nx, int ny, int ns, hitable **world, camera **cam) {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
     int j = threadIdx.y + blockIdx.y * blockDim.y;
-
+    
     if((i >= nx) || (j >= ny)) return;
     int pixel_index = j * nx + i;
     
+    curandState state;
+    curand_init((unsigned long long)clock64() + pixel_index, (unsigned long long)0, 0, &state);
+    
     vec3 col(0,0,0);
     for(int s=0; s<ns; s++){
-        float u = float(i + rand_numbers[pixel_index])/ float(nx);
-        float v = float(j + rand_numbers[pixel_index])/ float(ny);
+        float u = float(i + curand_uniform(&state)) / float(nx);
+        float v = float(j + curand_uniform(&state)) / float(ny);
         ray r = (*cam)->get_ray(u, v);
         col += color(r, world);
     }
+    
     img[pixel_index] = 255.99 * (col/float(ns));
     //col /= float(ns);
     //col[0] = sqrt(col[0]);
@@ -109,8 +78,6 @@ int main() {
     vec3 *img;
     cudaMallocManaged((void **)&img, nx*ny*sizeof(vec3));
 
-    float *rand_numbers;
-    cudaMallocManaged((void **)&rand_numbers, nx*ny*sizeof(float));
 
     hitable **list, **world; 
     cudaMalloc((void **)&list, 2*sizeof(hitable *));
@@ -119,15 +86,11 @@ int main() {
     camera **cam;
     cudaMalloc((void **)&cam, sizeof(camera *));
 
-
     /**********/
     create_world<<<1,1>>>(list, world, cam);
     cudaDeviceSynchronize();
     
-    random_generate<<<blocks, threads>>>(rand_numbers, nx, ny);
-    cudaDeviceSynchronize();
-
-    render<<<blocks, threads>>>(img, nx, ny, ns, world, cam, rand_numbers);
+    render<<<blocks, threads>>>(img, nx, ny, ns, world, cam);
     cudaDeviceSynchronize();
 
     /**********/
@@ -145,6 +108,14 @@ int main() {
     }
 
     /**********/
-    cudaFree(img);
+    cudaDeviceSynchronize();
+    //void* freeList[5] = {cam, world, list, img};
+    //for(int i=0; i<5; i++) cudaFree(freeList[i]);    
     free_world<<<1,1>>>(list, world, cam);
+    cudaFree(cam);
+    cudaFree(world);
+    cudaFree(list);
+    cudaFree(img);
+    
+    cudaDeviceReset();
 }
