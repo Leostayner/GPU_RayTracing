@@ -9,7 +9,7 @@
 #include "material.h"
 
 //Alterar
-__global__ void create_world(hitable **d_list, hitable **d_world, camera **d_camera) {
+__global__ void create_world(hitable **d_list, hitable **d_world, camera **d_camera, int nx, int ny) {
     if (threadIdx.x == 0 && blockIdx.x == 0) {
         d_list[0] = new sphere(vec3(0,0,-1), 0.5,new lambertian(vec3(0.1, 0.2, 0.5)));
         d_list[1] = new sphere(vec3(0,-100.5,-1), 100, new lambertian(vec3(0.8, 0.8, 0.0)));
@@ -17,7 +17,7 @@ __global__ void create_world(hitable **d_list, hitable **d_world, camera **d_cam
         d_list[3] = new sphere(vec3(-1,0,-1), 0.5, new dielectric(1.5));
         d_list[4] = new sphere(vec3(-1,0,-1), -0.45, new dielectric(1.5));
         *d_world = new hitable_list(d_list,5);
-        *d_camera = new camera();
+        *d_camera   = new camera(vec3(-2,2,1), vec3(0,0,-1), vec3(0,1,0), 20.0, float(nx)/float(ny));
     }
 }
 
@@ -106,7 +106,7 @@ int main() {
 
     
     /**********/
-    create_world<<<1,1>>>(list, world, cam);
+    create_world<<<1,1>>>(list, world, cam, nx, ny);
     cudaDeviceSynchronize();
     
     render<<<blocks, threads>>>(img, nx, ny, ns, world, cam);
