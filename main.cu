@@ -8,30 +8,59 @@
 #include "camera.h"
 #include "material.h"
 
-//Alterar
-__global__ void create_world(hitable **d_list, hitable **d_world, camera **d_camera, int nx, int ny) {
+#define num_hitables 488
+
+__device__ void random_scene(hitable **d_list) {
+    curandState local_rand_state;
+    curand_init((unsigned long long)clock64(), (unsigned long long)0, 0, &local_rand_state);
+
+    d_list[0] = new sphere(vec3(0,-1000.0,-1), 1000, new lambertian(vec3(0.5, 0.5, 0.5)));
+    int i = 1;
+    
+    for(int a = -11; a < 11; a++) {
+        for(int b = -11; b < 11; b++) {
+            float choose_mat = curand_uniform(&local_rand_state);
+            vec3 center(a+curand_uniform(&local_rand_state),0.2,b+curand_uniform(&local_rand_state));
+            
+            if(choose_mat < 0.8f) 
+                d_list[i++] = new sphere(center, 0.2, new lambertian(vec3(curand_uniform(&local_rand_state)*curand_uniform(&local_rand_state), 
+                                                                          curand_uniform(&local_rand_state)*curand_uniform(&local_rand_state), 
+                                                                          curand_uniform(&local_rand_state)*curand_uniform(&local_rand_state))));
+            
+            else if(choose_mat < 0.95f) 
+                d_list[i++] = new sphere(center, 0.2, new metal(vec3(0.5f*(1.0f+curand_uniform(&local_rand_state)), 
+                                                                     0.5f*(1.0f+curand_uniform(&local_rand_state)), 
+                                                                     0.5f*(1.0f+curand_uniform(&local_rand_state))), 
+                                                                     0.5f*curand_uniform(&local_rand_state)));
+
+            else d_list[i++] = new sphere(center, 0.2, new dielectric(1.5));
+            
+        }
+    }
+    d_list[i++] = new sphere(vec3(0, 1,0),  1.0, new dielectric(1.5));
+    d_list[i++] = new sphere(vec3(-4, 1, 0), 1.0, new lambertian(vec3(0.4, 0.2, 0.1)));
+    d_list[i++] = new sphere(vec3(4, 1, 0),  1.0, new metal(vec3(0.7, 0.6, 0.5), 0.0));
+
+}
+
+__global__ void create_scene(hitable **d_list, hitable **d_world, camera **d_camera, int nx, int ny) {
     if (threadIdx.x == 0 && blockIdx.x == 0) {
-        d_list[0] = new sphere(vec3(0,0,-1), 0.5,new lambertian(vec3(0.1, 0.2, 0.5)));
-        d_list[1] = new sphere(vec3(0,-100.5,-1), 100, new lambertian(vec3(0.8, 0.8, 0.0)));
-        d_list[2] = new sphere(vec3(1,0,-1), 0.5, new metal(vec3(0.8, 0.6, 0.2), 0.0));
-        d_list[3] = new sphere(vec3(-1,0,-1), 0.5, new dielectric(1.5));
-        d_list[4] = new sphere(vec3(-1,0,-1), -0.45, new dielectric(1.5));
-        *d_world = new hitable_list(d_list,5);
-        vec3 lookfrom(3,3,2);
-        vec3 lookat(0,0,-1);
-        *d_camera   = new camera(lookfrom, lookat, vec3(0,1,0), 20.0, float(nx)/float(ny), 2.0, (lookfrom-lookat).length());
+        random_scene(d_list);
+        *d_world  = new hitable_list(d_list, num_hitables);
+        
+        vec3 lookfrom(13,2,3);
+        vec3 lookat(0,0,0);
+        *d_camera   = new camera(lookfrom, lookat, vec3(0,1,0), 30.0, float(nx)/float(ny), 0.1, (lookfrom-lookat).length());
     }
 }
 
-//Alterar
-__global__ void free_world(hitable **d_list, hitable **d_world, camera **d_camera) {
-    for(int i=0; i < 4; i++) {
-        delete ((sphere *)d_list[i])->mat_ptr;
-        delete d_list[i];
-    }
+
+__global__ void free_scene(hitable **d_list, hitable **d_world, camera **d_camera) {
+    for(int i=0; i < 22*22+1+3; i++) delete d_list[i];
     delete *d_world;
     delete *d_camera;
 }
+
 
 __device__ vec3 color(const ray& r, hitable **world, curandState *rand_state) {
     ray cur_ray = r;
@@ -87,8 +116,9 @@ __global__ void render(vec3 *img, int nx, int ny, int ns, hitable **world, camer
 
 int main() {
     int nx = 1200;
-    int ny = 600;
-    int ns = 100;
+    int ny = 800; 
+    int ns = 10;
+    
     int tx = 8;
     int ty = 8;
     
@@ -97,18 +127,18 @@ int main() {
 
     /**********/
     vec3 *img;
-    cudaMallocManaged((void **)&img, nx*ny*sizeof(vec3));
+    cudaMallocManaged(&img, nx*ny*sizeof(vec3));
 
     hitable **list, **world; 
-    cudaMalloc((void **)&list, 2*sizeof(hitable *));
-    cudaMalloc((void **)&world, sizeof(hitable *));
+    cudaMalloc(&list, num_hitables*sizeof(hitable *));
+    cudaMalloc(&world, sizeof(hitable *));
 
     camera **cam;
-    cudaMalloc((void **)&cam, sizeof(camera *));
+    cudaMalloc(&cam, sizeof(camera *));
+ 
 
-    
     /**********/
-    create_world<<<1,1>>>(list, world, cam, nx, ny);
+    create_scene<<<1,1>>>(list, world, cam, nx, ny);
     cudaDeviceSynchronize();
     
     render<<<blocks, threads>>>(img, nx, ny, ns, world, cam);
@@ -130,7 +160,7 @@ int main() {
 
     /**********/
     cudaDeviceSynchronize();
-    free_world<<<1,1>>>(list, world, cam);
+    free_scene<<<1,1>>>(list, world, cam);
     void* freeList[4] = {cam, world, list, img};
     for(int i=0; i<4; i++) cudaFree(freeList[i]);    
     cudaDeviceReset();
