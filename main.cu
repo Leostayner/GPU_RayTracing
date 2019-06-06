@@ -7,8 +7,13 @@
 #include "sphere.h"
 #include "camera.h"
 #include "material.h"
+#include <chrono>
+#include <fstream>
+#include <sstream>
+
 
 #define num_hitables 488
+using namespace std::chrono;
 
 __device__ void random_scene(hitable **d_list) {
     curandState local_rand_state;
@@ -50,7 +55,7 @@ __global__ void create_scene(hitable **d_list, hitable **d_world, camera **d_cam
         
         vec3 lookfrom(13,2,3);
         vec3 lookat(0,0,0);
-        *d_camera   = new camera(lookfrom, lookat, vec3(0,1,0), 30.0, float(nx)/float(ny), 0.1, (lookfrom-lookat).length());
+        *d_camera = new camera(lookfrom, lookat, vec3(0,1,0), 30.0, float(nx)/float(ny), 0.1, (lookfrom-lookat).length());
     }
 }
 
@@ -115,17 +120,23 @@ __global__ void render(vec3 *img, int nx, int ny, int ns, hitable **world, camer
 
 
 int main() {
-    int nx = 1200;
-    int ny = 800; 
-    int ns = 10;
-    
+    int nx, ny, ns;
     int tx = 8;
     int ty = 8;
+    
+    std::cout << "nx: ";
+    std::cin >> nx;
+    
+    std::cout << "ny: ";
+    std::cin >> ny;
+    
+    std::cout << "ns: ";
+    std::cin >> ns;
     
     dim3 blocks(nx/tx+1,ny/ty+1);
     dim3 threads(tx,ty);
 
-    /**********/
+    //Alloc Memory
     vec3 *img;
     cudaMallocManaged(&img, nx*ny*sizeof(vec3));
 
@@ -137,16 +148,21 @@ int main() {
     cudaMalloc(&cam, sizeof(camera *));
  
 
-    /**********/
+    auto start = high_resolution_clock::now();
+    //GPU Process
     create_scene<<<1,1>>>(list, world, cam, nx, ny);
     cudaDeviceSynchronize();
     
     render<<<blocks, threads>>>(img, nx, ny, ns, world, cam);
     cudaDeviceSynchronize();
 
-    /**********/
+    //Generate image
     std::cerr << "Rendering Image: " << nx << "x" << ny << std::endl;
-    std::cout << "P3\n" << nx << " " << ny << "\n255\n";
+    
+    std::ofstream myfile;
+    myfile.open("Image.ppm");
+    
+    myfile << "P3\n" << nx << " " << ny << "\n255\n";
     
     for (int j = ny-1; j >= 0; j--) {
         for (int i = 0; i < nx; i++) {
@@ -154,11 +170,17 @@ int main() {
             int ir = int(img[pixel_index].r());
             int ig = int(img[pixel_index].g());
             int ib = int(img[pixel_index].b());
-            std::cout << ir << " " << ig << " " << ib << "\n";
+            myfile << ir << " " << ig << " " << ib << std::endl;
+            
         }
     }
 
-    /**********/
+    myfile.close();
+
+    auto end_time = duration_cast<duration<double>>(high_resolution_clock::now() - start).count();
+    std::cout << "Tempo de Execução: " << end_time << " segundos" << std::endl ;
+
+    //Free Components
     cudaDeviceSynchronize();
     free_scene<<<1,1>>>(list, world, cam);
     void* freeList[4] = {cam, world, list, img};
